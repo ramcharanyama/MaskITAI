@@ -1,24 +1,33 @@
-# Python
+# ── Python ──────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+.env.local
 venv/
 env/
+.venv/
 
-# Node
+# ── Node ────────────────────────────────
 node_modules/
 .next/
 out/
 
-# OS
+# ── OS / Mac junk ───────────────────────
 .DS_Store
+._*
+__MACOSX/
 Thumbs.db
+Desktop.ini
 
-# Uploads/outputs
-backend/uploads/*
-backend/outputs/*
-backend/tmp_downloads/*
-!backend/uploads/.gitkeep
-!backend/outputs/.gitkeep
-!backend/tmp_downloads/.gitkeep
+# ── Uploads / outputs / temp ────────────
+backend/uploads/
+backend/outputs/
+backend/tmp_downloads/
+tmp_downloads/
+
+# ── IDE ─────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo

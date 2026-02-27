@@ -26,6 +26,24 @@ from app.utils.pdf_handler import PDFHandler
 
 logger = logging.getLogger(__name__)
 
+# Severity weights for privacy score calculation
+ENTITY_SEVERITY = {
+    "SSN": 1.0,
+    "CREDIT_CARD": 1.0,
+    "AADHAAR": 1.0,
+    "PAN": 0.9,
+    "DATE_OF_BIRTH": 0.8,
+    "PHONE": 0.7,
+    "EMAIL": 0.7,
+    "IP_ADDRESS": 0.6,
+    "ADDRESS": 0.6,
+    "LOCATION": 0.5,
+    "PERSON_NAME": 0.4,
+    "ORGANIZATION": 0.3,
+    "DATE": 0.2,
+}
+DEFAULT_SEVERITY = 0.5
+
 
 class RedactionOrchestrator:
     """
@@ -118,6 +136,10 @@ class RedactionOrchestrator:
 
         entity_stats = self.entity_merger.get_stats(updated_entities)
 
+        privacy_score = self._calculate_privacy_score(
+            text, updated_entities, verification["passed"]
+        )
+
         return {
             "original_text": text,
             "redacted_text": redacted_text,
@@ -126,6 +148,7 @@ class RedactionOrchestrator:
             "processing_time_ms": round(processing_time, 2),
             "strategy_used": strategy,
             "verification_passed": verification["passed"],
+            "privacy_score": privacy_score,
             "stats": entity_stats
         }
 
@@ -214,6 +237,9 @@ class RedactionOrchestrator:
 
         self.stats["total_files_processed"] += 1
         self._update_stats(result.get("entities_found", []), strategy, result.get("processing_time_ms", 0))
+        result["privacy_score"] = self._calculate_privacy_score(
+            result.get("ocr_text", ""), result.get("entities_found", []) + result.get("audit_log", []), True
+        )
         return result
 
     # ── PDF redaction (Module 2) ──
@@ -235,6 +261,9 @@ class RedactionOrchestrator:
 
         self.stats["total_files_processed"] += 1
         self._update_stats(result.get("entities_found", []), strategy, result.get("processing_time_ms", 0))
+        result["privacy_score"] = self._calculate_privacy_score(
+            result.get("full_text", ""), result.get("entities_found", []), True
+        )
         return result
 
     # ── Audio redaction (Module 3) ──
@@ -258,6 +287,9 @@ class RedactionOrchestrator:
 
         self.stats["total_files_processed"] += 1
         self._update_stats(result.get("entities_found", []), strategy, result.get("processing_time_ms", 0))
+        result["privacy_score"] = self._calculate_privacy_score(
+            result.get("original_transcript", ""), result.get("entities_found", []) + result.get("audit_log", []), True
+        )
         return result
 
     # ── Video redaction (Module 4) ──
@@ -278,6 +310,10 @@ class RedactionOrchestrator:
             result["job_id"] = job_id
 
         self.stats["total_files_processed"] += 1
+        all_entities = result.get("visual_audit", []) + result.get("audio_audit", [])
+        result["privacy_score"] = self._calculate_privacy_score(
+            "", all_entities, True
+        )
         return result
 
     def _extract_image_text(self, image_path: str) -> str:
@@ -340,6 +376,107 @@ class RedactionOrchestrator:
             "avg_processing_time_ms": round(avg_time, 2),
             "entity_type_distribution": self.stats["entity_type_distribution"],
             "strategy_usage": self.stats["strategy_usage"],
+        }
+
+    def _calculate_privacy_score(
+        self,
+        original_text: str,
+        entities: List[Dict],
+        verification_passed: bool
+    ) -> Dict:
+        """
+        Calculate a privacy risk score (0–100) AFTER redaction.
+
+        100 = fully private (no PII risk remains)
+          0 = high privacy risk
+
+        Components:
+          - base score starts at 100 (clean slate)
+          - deductions for PII found (weighted by severity)
+          - bonus for high-confidence detection
+          - penalty if verification failed
+        """
+        if not entities:
+            return {
+                "score": 100,
+                "grade": "A+",
+                "label": "Fully Private",
+                "breakdown": {
+                    "entities_penalty": 0,
+                    "severity_penalty": 0,
+                    "confidence_bonus": 0,
+                    "verification_bonus": 10,
+                    "density_penalty": 0,
+                },
+            }
+
+        # ── Severity-weighted penalty ──
+        total_severity = 0
+        confidences = []
+        for e in entities:
+            etype = e.get("entity_type", "UNKNOWN")
+            severity = ENTITY_SEVERITY.get(etype, DEFAULT_SEVERITY)
+            total_severity += severity
+            conf = e.get("confidence", 0.8)
+            if isinstance(conf, (int, float)):
+                confidences.append(conf)
+
+        # More entities → bigger deduction, but diminishing returns
+        entity_count = len(entities)
+        entities_penalty = min(40, entity_count * 3)  # max 40pt loss
+
+        # Severity penalty (weighted average × scaling factor)
+        avg_severity = total_severity / max(entity_count, 1)
+        severity_penalty = min(25, round(avg_severity * entity_count * 2.5))  # max 25pt
+
+        # Density: PII per 100 chars of original text
+        text_len = max(len(original_text), 1)
+        density = (entity_count / text_len) * 100
+        density_penalty = min(15, round(density * 10))  # max 15pt
+
+        # Confidence bonus: high-confidence detections mean the redactor
+        # is sure it caught everything → reward
+        avg_conf = sum(confidences) / max(len(confidences), 1)
+        confidence_bonus = round(avg_conf * 10)  # up to +10
+
+        # Verification bonus
+        verification_bonus = 10 if verification_passed else -5
+
+        raw_score = (
+            100
+            - entities_penalty
+            - severity_penalty
+            - density_penalty
+            + confidence_bonus
+            + verification_bonus
+        )
+        score = max(0, min(100, round(raw_score)))
+
+        # Grade mapping
+        if score >= 90:
+            grade, label = "A+", "Excellent Privacy"
+        elif score >= 80:
+            grade, label = "A", "Strong Privacy"
+        elif score >= 70:
+            grade, label = "B", "Good Privacy"
+        elif score >= 60:
+            grade, label = "C", "Moderate Risk"
+        elif score >= 40:
+            grade, label = "D", "High Risk"
+        else:
+            grade, label = "F", "Critical Risk"
+
+        return {
+            "score": score,
+            "grade": grade,
+            "label": label,
+            "breakdown": {
+                "entities_penalty": entities_penalty,
+                "severity_penalty": severity_penalty,
+                "confidence_bonus": confidence_bonus,
+                "verification_bonus": verification_bonus,
+                "density_penalty": density_penalty,
+            },
         }
 
     def _update_stats(self, entities: List[Dict], strategy: str, processing_time: float):

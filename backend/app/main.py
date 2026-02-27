@@ -2,27 +2,45 @@
 AI PII Redactor - FastAPI Application
 Multi-Modal Privacy Preservation Framework
 
-Main application entry point with CORS, logging, and route registration.
+Production-ready entry point for Railway deployment.
+Includes MySQL connectivity, CORS, logging, and route registration.
 """
+
+import os
+import time
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
-import time
+import pymysql
 
 from app.routers import redaction
 
-# Configure logging
+# ── Logging ──────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Track startup time
+# ── Startup timestamp ───────────────────────────────────
 START_TIME = time.time()
 
-# Create FastAPI app
+# ── MySQL helper ─────────────────────────────────────────
+def _get_db_connection():
+    """Return a fresh PyMySQL connection using Railway env vars."""
+    return pymysql.connect(
+        host=os.environ.get("MYSQLHOST", "localhost"),
+        port=int(os.environ.get("MYSQLPORT", 3306)),
+        user=os.environ.get("MYSQLUSER", "root"),
+        password=os.environ.get("MYSQLPASSWORD", ""),
+        database=os.environ.get("MYSQLDATABASE", "railway"),
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=10,
+    )
+
+
+# ── FastAPI app ──────────────────────────────────────────
 app = FastAPI(
     title="AI PII Redactor",
     description="""
@@ -48,13 +66,14 @@ app = FastAPI(
     - `/api/v1/entity-types` — List detected entity types
     - `/api/v1/stats` — Processing statistics
     - `/api/v1/health` — Health check
+    - `/db-test` — Verify MySQL connectivity
     """,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
-# CORS middleware
+# ── CORS (allow all origins for hackathon demo) ─────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -64,30 +83,70 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "Content-Type", "Content-Length"],
 )
 
-# Register routers
+# ── Register existing routers ───────────────────────────
 app.include_router(redaction.router)
 
 
+# ── Routes ──────────────────────────────────────────────
 @app.get("/")
 async def root():
-    """Root endpoint with system info."""
+    """Health / info route."""
     uptime = time.time() - START_TIME
     return {
+        "status": "ok",
         "name": "AI PII Redactor",
         "version": "1.0.0",
         "description": "Multi-Modal Privacy Preservation Framework",
         "uptime_seconds": round(uptime, 2),
         "docs": "/docs",
-        "api_base": "/api/v1"
+        "api_base": "/api/v1",
+        "environment": "production" if os.environ.get("RAILWAY_ENVIRONMENT") else "development",
     }
 
 
+@app.get("/db-test")
+async def db_test():
+    """Verify MySQL database connectivity."""
+    try:
+        conn = _get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1 AS alive")
+            row = cursor.fetchone()
+        conn.close()
+        return {
+            "status": "connected",
+            "database": os.environ.get("MYSQLDATABASE", "railway"),
+            "host": os.environ.get("MYSQLHOST", "localhost"),
+            "result": row,
+        }
+    except Exception as exc:
+        logger.error("Database connection failed: %s", exc)
+        return {
+            "status": "error",
+            "detail": str(exc),
+        }
+
+
+# ── Lifecycle events ────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🛡️  AI PII Redactor starting up...")
-    logger.info("📚 API documentation available at /docs")
+    port = os.environ.get("PORT", "8000")
+    logger.info("🛡️  AI PII Redactor starting on 0.0.0.0:%s", port)
+    logger.info("📚 API docs → /docs")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("🛡️  AI PII Redactor shutting down...")
+
+
+# ── Uvicorn entrypoint (Railway uses Procfile) ──────────
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        log_level="info",
+    )

@@ -49,6 +49,72 @@ const LOADING_STEPS = [
     "Merging entities...", "Applying redaction...", "Verifying output..."
 ];
 
+/* ── Privacy Score Gauge Component ─────── */
+const GRADE_CONFIG = {
+    "A+": { color: "#10b981", bg: "rgba(16,185,129,0.08)" },
+    "A": { color: "#22c55e", bg: "rgba(34,197,94,0.08)" },
+    "B": { color: "#84cc16", bg: "rgba(132,204,22,0.08)" },
+    "C": { color: "#f59e0b", bg: "rgba(245,158,11,0.08)" },
+    "D": { color: "#f97316", bg: "rgba(249,115,22,0.08)" },
+    "F": { color: "#ef4444", bg: "rgba(239,68,68,0.08)" },
+};
+
+function PrivacyScoreGauge({ privacyScore }) {
+    if (!privacyScore) return null;
+    const { score, grade, label, breakdown } = privacyScore;
+    const cfg = GRADE_CONFIG[grade] || GRADE_CONFIG["B"];
+    const deg = (score / 100) * 360;
+
+    return (
+        <div className="privacy-score-card slide-up">
+            <div className="privacy-score-header">
+                <span className="material-symbols-outlined" style={{ fontSize: 20, color: cfg.color }}>verified_user</span>
+                <span className="privacy-score-title">Privacy Score</span>
+            </div>
+            <div className="privacy-score-body">
+                <div className="privacy-gauge-wrap">
+                    <div className="privacy-gauge" style={{
+                        background: `conic-gradient(${cfg.color} 0deg ${deg}deg, rgba(148,163,184,0.12) ${deg}deg 360deg)`
+                    }}>
+                        <div className="privacy-gauge-inner">
+                            <div className="privacy-gauge-score" style={{ color: cfg.color }}>{score}</div>
+                            <div className="privacy-gauge-grade" style={{ background: cfg.bg, color: cfg.color }}>{grade}</div>
+                        </div>
+                    </div>
+                    <div className="privacy-gauge-label">{label}</div>
+                </div>
+                <div className="privacy-breakdown">
+                    <div className="privacy-breakdown-title">Score Breakdown</div>
+                    {breakdown && (
+                        <>
+                            <div className="privacy-breakdown-row">
+                                <span className="pb-label">🔻 Entity Penalty</span>
+                                <span className="pb-value negative">-{breakdown.entities_penalty}</span>
+                            </div>
+                            <div className="privacy-breakdown-row">
+                                <span className="pb-label">⚠️ Severity Penalty</span>
+                                <span className="pb-value negative">-{breakdown.severity_penalty}</span>
+                            </div>
+                            <div className="privacy-breakdown-row">
+                                <span className="pb-label">📏 Density Penalty</span>
+                                <span className="pb-value negative">-{breakdown.density_penalty}</span>
+                            </div>
+                            <div className="privacy-breakdown-row">
+                                <span className="pb-label">🎯 Confidence Bonus</span>
+                                <span className="pb-value positive">+{breakdown.confidence_bonus}</span>
+                            </div>
+                            <div className="privacy-breakdown-row">
+                                <span className="pb-label">✅ Verification Bonus</span>
+                                <span className="pb-value positive">+{breakdown.verification_bonus}</span>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 /* ── Mode configuration ────────────────── */
 const MODES = [
     { id: "text", label: "Text Input", icon: "edit_note", accept: null },
@@ -487,6 +553,9 @@ export default function Home() {
                                                 )}
                                             </div>
 
+                                            {/* Privacy Score */}
+                                            <PrivacyScoreGauge privacyScore={mediaResult.privacy_score} />
+
                                             {/* Transcript for audio/video */}
                                             {(mediaResult.original_transcript || mediaResult.audio_result?.original_transcript) && (
                                                 <div style={{ marginTop: 16 }}>
@@ -632,6 +701,9 @@ export default function Home() {
                                 <div className="result-metric-label">Verification</div>
                             </div>
                         </div>
+
+                        {/* Privacy Score */}
+                        <PrivacyScoreGauge privacyScore={result.privacy_score} />
 
                         {result.entities_found?.length > 0 && (
                             <div className="results-grid">
